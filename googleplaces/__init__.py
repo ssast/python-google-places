@@ -220,7 +220,7 @@ class GooglePlaces(object):
 
     def nearby_search(self, language=lang.ENGLISH, keyword=None, location=None,
                lat_lng=None, name=None, radius=3200, rankby=ranking.PROMINENCE,
-               sensor=False, type=None, types=[]):
+               sensor=False, type=None, types=[], pagetoken=None):
         """Perform a nearby search using the Google Places API.
 
         One of either location or lat_lng are required, the rest of the keyword
@@ -251,41 +251,45 @@ class GooglePlaces(object):
                     Places (default []). If there is only one item the request
                     will be send as type param.
         """
-        if location is None and lat_lng is None:
-            raise ValueError('One of location or lat_lng must be passed in.')
-        if rankby == 'distance':
-            # As per API docs rankby == distance:
-            #  One or more of keyword, name, or types is required.
-            if keyword is None and types == [] and name is None:
-                raise ValueError('When rankby = googleplaces.ranking.DISTANCE, ' +
-                                 'name, keyword or types kwargs ' +
-                                 'must be specified.')
-        self._sensor = sensor
-        radius = (radius if radius <= GooglePlaces.MAXIMUM_SEARCH_RADIUS
-                  else GooglePlaces.MAXIMUM_SEARCH_RADIUS)
-        lat_lng_str = self._generate_lat_lng_string(lat_lng, location)
-        self._request_params = {'location': lat_lng_str}
-        if rankby == 'prominence':
-            self._request_params['radius'] = radius
+        if pagetoken is None:
+            if location is None and lat_lng is None:
+                raise ValueError('One of location or lat_lng must be passed in.')
+            if rankby == 'distance':
+                # As per API docs rankby == distance:
+                #  One or more of keyword, name, or types is required.
+                if keyword is None and types == [] and name is None:
+                    raise ValueError('When rankby = googleplaces.ranking.DISTANCE, ' +
+                                     'name, keyword or types kwargs ' +
+                                     'must be specified.')
+            self._sensor = sensor
+            radius = (radius if radius <= GooglePlaces.MAXIMUM_SEARCH_RADIUS
+                      else GooglePlaces.MAXIMUM_SEARCH_RADIUS)
+            lat_lng_str = self._generate_lat_lng_string(lat_lng, location)
+            self._request_params = {'location': lat_lng_str}
+            if rankby == 'prominence':
+                self._request_params['radius'] = radius
+            else:
+                self._request_params['rankby'] = rankby
+            if type:
+                self._request_params['type'] = type
+            elif types:
+                if len(types) == 1:
+                    self._request_params['type'] = types[0]
+                elif len(types) > 1:
+                    self._request_params['types'] = '|'.join(types)
+            if keyword is not None:
+                self._request_params['keyword'] = keyword
+            if name is not None:
+                self._request_params['name'] = name
+            if language is not None:
+                self._request_params['language'] = language
         else:
-            self._request_params['rankby'] = rankby
-        if type:
-            self._request_params['type'] = type
-        elif types:
-            if len(types) == 1:
-                self._request_params['type'] = types[0]
-            elif len(types) > 1:
-                self._request_params['types'] = '|'.join(types)
-        if keyword is not None:
-            self._request_params['keyword'] = keyword
-        if name is not None:
-            self._request_params['name'] = name
-        if language is not None:
-            self._request_params['language'] = language
+            self._request_params['pagetoken'] = pagetoken
         self._add_required_param_keys()
         url, places_response = _fetch_remote_json(
                 GooglePlaces.NEARBY_SEARCH_API_URL, self._request_params)
         _validate_response(url, places_response)
+
         return GooglePlacesSearchResult(self, places_response)
 
     def text_search(self, query, language=lang.ENGLISH, lat_lng=None,
@@ -757,6 +761,10 @@ class GooglePlacesSearchResult(object):
         for place in response['results']:
             self._places.append(Place(query_instance, place))
         self._html_attributions = response.get('html_attributions', [])
+        if 'next_page_token' in response:
+            self._next_page_token = response['next_page_token']
+        else:
+            self._next_page_token = None
 
     @property
     def raw_response(self):
@@ -783,6 +791,14 @@ class GooglePlacesSearchResult(object):
     def has_attributions(self):
         """Returns a flag denoting if the response had any html attributions."""
         return len(self.html_attributions) > 0
+
+    @property
+    def next_page_token(self):
+        """Returns the next_page_token of the response (if available), which
+        can be passed to another nearby_search call to get the next page of
+        results.
+        """
+        return self._next_page_token
 
     def __repr__(self):
         """ Return a string representation stating the number of results."""
